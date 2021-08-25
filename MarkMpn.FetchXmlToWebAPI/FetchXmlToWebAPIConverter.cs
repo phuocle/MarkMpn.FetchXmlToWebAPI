@@ -306,7 +306,10 @@ namespace MarkMpn.FetchXmlToWebAPI
                 var expand = new LinkEntityOData();
                 expand.PropertyName = LinkItemToNavigationProperty(entityName, currentLinkEntity, out var child, out var manyToManyNextLink);
                 currentLinkEntity = manyToManyNextLink ?? currentLinkEntity;
-                expand.Select.AddRange(ConvertSelect(currentLinkEntity.name, currentLinkEntity.Items));
+
+                var selects = ConvertSelect(currentLinkEntity.name, currentLinkEntity.Items);
+                if (selects.Count() == 0) continue;
+                expand.Select.AddRange(selects);
 
                 if (linkEntity.linktype == "outer" || child)
                 {
@@ -428,12 +431,12 @@ namespace MarkMpn.FetchXmlToWebAPI
                 }
 
                 result = navigationProperty + GetPropertyName(attrMeta);
-                
+
                 if (attrMeta is ManagedPropertyAttributeMetadata)
                 {
                     result += "/Value";
                 }
-                
+
                 string function = null;
                 var functionParameters = 1;
                 var functionParameterType = typeof(string);
