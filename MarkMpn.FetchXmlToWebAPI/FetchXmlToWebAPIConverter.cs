@@ -1,6 +1,7 @@
 ﻿using Microsoft.Xrm.Sdk.Metadata;
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -9,129 +10,142 @@ using System.Xml.Serialization;
 
 namespace MarkMpn.FetchXmlToWebAPI
 {
+    public class NameValue
+    {
+        public string Name { get; set; }
+        public string Name2 { get; set; }
+        public string Value { get; set; }
+        public string Value2 { get; set; }
+    }
+
+    public class LinkEntityOData
+    {
+        protected virtual string Separator => ";";
+
+        public string PropertyName { get; set; }
+
+        public List<string> Select { get; } = new List<string>();
+
+        public List<LinkEntityOData> Expand { get; } = new List<LinkEntityOData>();
+
+        public List<FilterOData> Filter { get; } = new List<FilterOData>();
+
+        protected virtual IEnumerable<string> GetParts()
+        {
+            if (Select.Any())
+                yield return "$select=" + String.Join(",", Select);
+
+            if (Expand.Any())
+                yield return "$expand=" + String.Join(",", Expand.Select(e => $"{e.PropertyName}({e})"));
+
+            if (Filter.Any())
+                yield return "$filter=" + String.Join(" and ", Filter);
+        }
+
+        public override string ToString()
+        {
+            return String.Join(Separator, GetParts());
+        }
+    }
+
+    public class FilterOData
+    {
+        public bool And { get; set; }
+
+        public List<string> Conditions { get; } = new List<string>();
+
+        public List<FilterOData> Filters { get; } = new List<FilterOData>();
+
+        public override string ToString()
+        {
+            if (Conditions.Count == 0 && Filters.Count == 0)
+                return null;
+
+            var items = Conditions.Select(c => c.ToString())
+                .Concat(Filters.Select(f => f.ToString()))
+                .Where(c => !String.IsNullOrEmpty(c));
+
+            var logicalOperator = And ? " and " : " or ";
+
+            return "(" + String.Join(logicalOperator, items) + ")";
+
+        }
+    }
+
+    public class EntityOData : LinkEntityOData
+    {
+        public int? Top { get; set; }
+
+        public List<NameValue> FetchData { get; set; }
+
+        public List<OrderOData> OrderBy { get; } = new List<OrderOData>();
+
+        public List<string> Groups { get; } = new List<string>();
+
+        public List<string> Aggregates { get; } = new List<string>();
+
+        protected override string Separator => "&";
+
+        protected override IEnumerable<string> GetParts()
+        {
+            if (Aggregates.Any())
+            {
+                var aggregate = $"aggregate({String.Join(",", Aggregates)})";
+
+                if (Groups.Any())
+                {
+                    aggregate = $"groupby(({String.Join(",", Groups)}),{aggregate})";
+                }
+
+                if (Filter.Any())
+                {
+                    aggregate = $"filter({String.Join(" and ", Filter)})/{aggregate}";
+                }
+
+                yield return "$apply=" + aggregate;
+                yield break;
+            }
+
+            foreach (var part in base.GetParts())
+                yield return part;
+
+            if (OrderBy.Any())
+                yield return "$orderby=" + String.Join(",", OrderBy);
+
+            if (Top != null)
+                yield return "$top=" + Top;
+        }
+
+        public override string ToString()
+        {
+            var query = base.ToString();
+
+            return "/" + PropertyName + (String.IsNullOrEmpty(query) ? "" : ("?" + query));
+        }
+    }
+
+    public class OrderOData
+    {
+        public string PropertyName { get; set; }
+
+        public bool Descending { get; set; }
+
+        public override string ToString()
+        {
+            return PropertyName + (Descending ? " desc" : " asc");
+        }
+    }
+
+
     /// <summary>
     /// Converts a FetchXML query to Web API format
     /// </summary>
     public class FetchXmlToWebAPIConverter
     {
-        class LinkEntityOData
-        {
-            protected virtual string Separator => ";";
-
-            public string PropertyName { get; set; }
-
-            public List<string> Select { get; } = new List<string>();
-
-            public List<LinkEntityOData> Expand { get; } = new List<LinkEntityOData>();
-
-            public List<FilterOData> Filter { get; } = new List<FilterOData>();
-
-            protected virtual IEnumerable<string> GetParts()
-            {
-                if (Select.Any())
-                    yield return "$select=" + String.Join(",", Select);
-
-                if (Expand.Any())
-                    yield return "$expand=" + String.Join(",", Expand.Select(e => $"{e.PropertyName}({e})"));
-
-                if (Filter.Any())
-                    yield return "$filter=" + String.Join(" and ", Filter);
-            }
-
-            public override string ToString()
-            {
-                return String.Join(Separator, GetParts());
-            }
-        }
-
-        class FilterOData
-        {
-            public bool And { get; set; }
-
-            public List<string> Conditions { get; } = new List<string>();
-
-            public List<FilterOData> Filters { get; } = new List<FilterOData>();
-
-            public override string ToString()
-            {
-                if (Conditions.Count == 0 && Filters.Count == 0)
-                    return null;
-
-                var items = Conditions.Select(c => c.ToString())
-                    .Concat(Filters.Select(f => f.ToString()))
-                    .Where(c => !String.IsNullOrEmpty(c));
-
-                var logicalOperator = And ? " and " : " or ";
-
-                return "(" + String.Join(logicalOperator, items) + ")";
-
-            }
-        }
-
-        class EntityOData : LinkEntityOData
-        {
-            public int? Top { get; set; }
-
-            public List<OrderOData> OrderBy { get; } = new List<OrderOData>();
-
-            public List<string> Groups { get; } = new List<string>();
-
-            public List<string> Aggregates { get; } = new List<string>();
-
-            protected override string Separator => "&";
-
-            protected override IEnumerable<string> GetParts()
-            {
-                if (Aggregates.Any())
-                {
-                    var aggregate = $"aggregate({String.Join(",", Aggregates)})";
-
-                    if (Groups.Any())
-                    {
-                        aggregate = $"groupby(({String.Join(",", Groups)}),{aggregate})";
-                    }
-
-                    if (Filter.Any())
-                    {
-                        aggregate = $"filter({String.Join(" and ", Filter)})/{aggregate}";
-                    }
-
-                    yield return "$apply=" + aggregate;
-                    yield break;
-                }
-
-                foreach (var part in base.GetParts())
-                    yield return part;
-
-                if (OrderBy.Any())
-                    yield return "$orderby=" + String.Join(",", OrderBy);
-
-                if (Top != null)
-                    yield return "$top=" + Top;
-            }
-
-            public override string ToString()
-            {
-                var query = base.ToString();
-
-                return "/" + PropertyName + (String.IsNullOrEmpty(query) ? "" : ("?" + query));
-            }
-        }
-
-        class OrderOData
-        {
-            public string PropertyName { get; set; }
-
-            public bool Descending { get; set; }
-
-            public override string ToString()
-            {
-                return PropertyName + (Descending ? " desc" : " asc");
-            }
-        }
-
         private readonly IMetadataProvider _metadata;
         private readonly string _orgUrl;
+        private List<NameValue> fetchData { get; } = new List<NameValue>();
+
 
         /// <summary>
         /// Creates a new <see cref="FetchXmlToWebAPIConverter"/>
@@ -149,7 +163,7 @@ namespace MarkMpn.FetchXmlToWebAPI
         /// </summary>
         /// <param name="fetch">The FetchXML query to convert</param>
         /// <returns>The equivalent Web API format query</returns>
-        public string ConvertFetchXmlToWebAPI(string fetch)
+        public string ConvertFetchXmlToWebAPIString(string fetch)
         {
             if (!_metadata.IsConnected)
             {
@@ -165,6 +179,22 @@ namespace MarkMpn.FetchXmlToWebAPI
 
                 var url = _orgUrl + converted;
                 return url;
+            }
+        }
+
+        public EntityOData ConvertFetchXmlToWebAPI(string fetch)
+        {
+            if (!_metadata.IsConnected)
+            {
+                throw new InvalidOperationException("Must have an active connection to CRM to compose OData query.");
+            }
+
+            using (var reader = new StringReader(fetch))
+            {
+                var serializer = new XmlSerializer(typeof(FetchType));
+                var parsed = (FetchType)serializer.Deserialize(reader);
+
+                return ConvertOData(parsed);
             }
         }
 
@@ -204,6 +234,8 @@ namespace MarkMpn.FetchXmlToWebAPI
             // Add extra filters to simulate inner joins
             var count = 1;
             odata.Filter.AddRange(ConvertInnerJoinFilters(entity.name, entity.Items, entity.Items, "", ref count));
+
+            odata.FetchData = fetchData;
 
             return odata;
         }
@@ -490,7 +522,7 @@ namespace MarkMpn.FetchXmlToWebAPI
                             else
                                 func = "startswith";
 
-                            result = $"{func}({HttpUtility.UrlEncode(navigationProperty + attrMeta.LogicalName)}, {FormatValue(typeof(string), value)})";
+                            result = $"{func}({HttpUtility.UrlEncode(navigationProperty + attrMeta.LogicalName)}, {FormatValue(typeof(string), value, attrMeta.LogicalName)})";
                         }
 
                         if (condition.@operator == @operator.notlike)
@@ -499,7 +531,7 @@ namespace MarkMpn.FetchXmlToWebAPI
                         break;
                     case @operator.beginswith:
                     case @operator.notbeginwith:
-                        result = $"startswith({HttpUtility.UrlEncode(navigationProperty + attrMeta.LogicalName)}, {FormatValue(typeof(string), condition.value)})";
+                        result = $"startswith({HttpUtility.UrlEncode(navigationProperty + attrMeta.LogicalName)}, {FormatValue(typeof(string), condition.value, attrMeta.LogicalName)})";
 
                         if (condition.@operator == @operator.notbeginwith)
                         {
@@ -508,7 +540,7 @@ namespace MarkMpn.FetchXmlToWebAPI
                         break;
                     case @operator.endswith:
                     case @operator.notendwith:
-                        result = $"endswith({HttpUtility.UrlEncode(navigationProperty + attrMeta.LogicalName)}, {FormatValue(typeof(string), condition.value)})";
+                        result = $"endswith({HttpUtility.UrlEncode(navigationProperty + attrMeta.LogicalName)}, {FormatValue(typeof(string), condition.value, attrMeta.LogicalName)})";
 
                         if (condition.@operator == @operator.notendwith)
                         {
@@ -789,13 +821,13 @@ namespace MarkMpn.FetchXmlToWebAPI
                 if (!String.IsNullOrEmpty(function))
                 {
                     if (functionParameters == Int32.MaxValue)
-                        return $"{navigationProperty}Microsoft.Dynamics.CRM.{HttpUtility.UrlEncode(function)}(PropertyName='{HttpUtility.UrlEncode(attrMeta.LogicalName)}',PropertyValues=[{String.Join(",", condition.Items.Select(i => FormatValue(functionParameterType, i.Value)))}])";
+                        return $"{navigationProperty}Microsoft.Dynamics.CRM.{HttpUtility.UrlEncode(function)}(PropertyName='{HttpUtility.UrlEncode(attrMeta.LogicalName)}',PropertyValues=[{String.Join(",", condition.Items.Select(i => FormatValue(functionParameterType, i.Value, attrMeta.LogicalName)))}])";
                     else if (functionParameters == 0)
                         return $"{navigationProperty}Microsoft.Dynamics.CRM.{HttpUtility.UrlEncode(function)}(PropertyName='{HttpUtility.UrlEncode(attrMeta.LogicalName)}')";
                     else if (functionParameters == 1)
-                        return $"{navigationProperty}Microsoft.Dynamics.CRM.{HttpUtility.UrlEncode(function)}(PropertyName='{HttpUtility.UrlEncode(attrMeta.LogicalName)}',PropertyValue={FormatValue(functionParameterType, condition.value)})";
+                        return $"{navigationProperty}Microsoft.Dynamics.CRM.{HttpUtility.UrlEncode(function)}(PropertyName='{HttpUtility.UrlEncode(attrMeta.LogicalName)}',PropertyValue={FormatValue(functionParameterType, condition.value, attrMeta.LogicalName)})";
                     else
-                        return $"{navigationProperty}Microsoft.Dynamics.CRM.{HttpUtility.UrlEncode(function)}(PropertyName='{HttpUtility.UrlEncode(attrMeta.LogicalName)}',{String.Join(",", condition.Items.Select((i, idx) => $"Property{idx + 1}={FormatValue(functionParameterType, i.Value)}"))})";
+                        return $"{navigationProperty}Microsoft.Dynamics.CRM.{HttpUtility.UrlEncode(function)}(PropertyName='{HttpUtility.UrlEncode(attrMeta.LogicalName)}',{String.Join(",", condition.Items.Select((i, idx) => $"Property{idx + 1}={FormatValue(functionParameterType, i.Value, attrMeta.LogicalName)}"))})";
                 }
 
                 if (!string.IsNullOrEmpty(value) && !result.Contains("("))
@@ -845,7 +877,7 @@ namespace MarkMpn.FetchXmlToWebAPI
                             break;
                     }
 
-                    result += FormatValue(valueType, value);
+                    result += FormatValue(valueType, value, attrMeta.LogicalName);
                 }
                 else if (!string.IsNullOrEmpty(condition.valueof))
                 {
@@ -947,10 +979,11 @@ namespace MarkMpn.FetchXmlToWebAPI
             return attr.LogicalName;
         }
 
-        private static string FormatValue(Type type, string s)
+        private string FormatValue(Type type, string s, string logicalName)
         {
             if (type == typeof(string))
-                return "'" + HttpUtility.UrlEncode(s.Replace("'", "''")) + "'";
+                //return "'" + HttpUtility.UrlEncode(s.Replace("'", "''")) + "'";
+                return GetFetchData(logicalName, HttpUtility.UrlEncode(s.Replace("'", "''")), s, true);
 
             if (type == typeof(DateTime))
             {
@@ -963,13 +996,34 @@ namespace MarkMpn.FetchXmlToWebAPI
             }
 
             if (type == typeof(bool))
-                return s == "1" ? "true" : "false";
+                //return s == "1" ? "true" : "false";
+                return GetFetchData(logicalName, s == "1" ? "true" : "false");
 
             if (type == typeof(Guid))
-                return Guid.Parse(s).ToString();
+                //return Guid.Parse(s).ToString();
+                return GetFetchData(logicalName, Guid.Parse(s).ToString());
 
-            return HttpUtility.UrlEncode(Convert.ChangeType(s, type).ToString());
+            return GetFetchData(logicalName, HttpUtility.UrlEncode(Convert.ChangeType(s, type).ToString()));
         }
+
+
+        private string GetFetchData(string logicalName, string value, string value2 = "", bool isString = false)
+        {
+            var count = fetchData.Count(x => x.Name == logicalName);
+            var index = count == 0 ? "" : (count + 1).ToString();
+            fetchData.Add(new NameValue
+            {
+                Name = logicalName,
+                Name2 = $"{logicalName}{index}",
+                Value = value,
+                Value2 = value2
+            });
+            if (isString)
+                return $"'${{fetchData.{logicalName}{index}}}'";
+            else
+                return $"${{fetchData.{logicalName}{index}}}";
+        }
+
 
         private IEnumerable<OrderOData> ConvertOrder(string entityName, object[] items)
         {
